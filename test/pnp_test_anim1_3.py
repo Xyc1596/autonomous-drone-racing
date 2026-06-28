@@ -156,8 +156,8 @@ class GatePose:
     confidence: float
     reprojection_error: float
     distance: float
-    # ---------- 新增字段：存储每个角点的 (dx, dy) 误差 ----------
-    reprojection_errors: np.ndarray  # shape (4,2)
+    # ---------- 新增字段：存储每个角点的重投影点 ----------
+    reprojection_points: np.ndarray  # shape (4,2)
 
 
 class PoseEstimator:
@@ -246,12 +246,10 @@ class PoseEstimator:
             proj, _ = cv2.projectPoints(self.gate_points_3d, rvec, tvec, self.camera_matrix, self.dist_coeffs)
             proj = proj.reshape(-1, 2)
             reproj_err = np.mean(np.linalg.norm(proj - image_points, axis=1))
-            # ---------- 新增：计算每个角点的 (dx, dy) 误差 ----------
-            reprojection_errors = proj - image_points  # shape (4,2)
 
             dist = np.linalg.norm(tvec)
             conf = detection.confidence * max(0, 1 - reproj_err / 10)
-            return GatePose(tvec, q, R, rvec, tvec, conf, reproj_err, float(dist), reprojection_errors)
+            return GatePose(tvec, q, R, rvec, tvec, conf, reproj_err, float(dist), proj)
         except cv2.error:
             return None
 
@@ -382,7 +380,7 @@ def main():
             drone_pos_w_est = [np.nan, np.nan, np.nan]
             drone_euler_w_est = [np.nan, np.nan, np.nan]
             # 初始化重投影误差为 NaN (4个角点，每个 dx, dy)
-            reproj_errors = np.full((4, 2), np.nan)
+            reproj_points = np.full((4, 2), np.nan)
         else:
             print(detection.corners)
             gate_pose = pose_est.estimate_pose(detection)
@@ -391,7 +389,7 @@ def main():
                 gate_euler_c_est = [np.nan, np.nan, np.nan]
                 drone_pos_w_est = [np.nan, np.nan, np.nan]
                 drone_euler_w_est = [np.nan, np.nan, np.nan]
-                reproj_errors = np.full((4, 2), np.nan)
+                reproj_points = np.full((4, 2), np.nan)
             else:
                 pos_gate_c_est = gate_pose.position
                 q_gate_c_est = gate_pose.orientation
@@ -414,8 +412,8 @@ def main():
                 gate_pos_c_est = pos_gate_c_est.tolist()
                 gate_euler_c_est = gate_euler_c_est.tolist()
 
-                # ---------- 获取重投影误差 ----------
-                reproj_errors = gate_pose.reprojection_errors  # shape (4,2)
+                # ---------- 获取重投影点 ----------
+                reproj_points = gate_pose.reprojection_points  # shape (4,2)
 
         # 真实值计算
         pos_drone_w_true_i = pos_drone_w_true[idx]
@@ -474,15 +472,15 @@ def main():
                 "corner_br_y": corners[2][1],
                 "corner_bl_x": corners[3][0],
                 "corner_bl_y": corners[3][1],
-                # ---------- 新增：每个角点的横纵重投影误差 (dx, dy) ----------
-                "reproj_tl_x": reproj_errors[0, 0],
-                "reproj_tl_y": reproj_errors[0, 1],
-                "reproj_tr_x": reproj_errors[1, 0],
-                "reproj_tr_y": reproj_errors[1, 1],
-                "reproj_br_x": reproj_errors[2, 0],
-                "reproj_br_y": reproj_errors[2, 1],
-                "reproj_bl_x": reproj_errors[3, 0],
-                "reproj_bl_y": reproj_errors[3, 1],
+                # ---------- 新增：每个角点的横纵重投影点 (x, y) ----------
+                "reproj_tl_x": reproj_points[0, 0],
+                "reproj_tl_y": reproj_points[0, 1],
+                "reproj_tr_x": reproj_points[1, 0],
+                "reproj_tr_y": reproj_points[1, 1],
+                "reproj_br_x": reproj_points[2, 0],
+                "reproj_br_y": reproj_points[2, 1],
+                "reproj_bl_x": reproj_points[3, 0],
+                "reproj_bl_y": reproj_points[3, 1],
             }
         )
 
@@ -562,6 +560,59 @@ def main():
     plt.tight_layout()
     fig1.savefig(output_dir / "gate_pose_comparison.png", dpi=150)
     fig2.savefig(output_dir / "drone_pose_comparison.png", dpi=150)
+
+    # 新增：角点检测与重投影对比图（10张子图）
+    fig3, axes3 = plt.subplots(2, 5, figsize=(14, 6))
+    fig3.suptitle("Corner Detection vs Reprojection")
+
+    colors = ['b', 'g', 'r', 'm']  # TL, TR, BR, BL 分别使用不同颜色
+    corner_names = ['tl', 'tr', 'br', 'bl']
+
+    # 前8张子图：每个角点的x和y坐标
+    for i, (color, name) in enumerate(zip(colors, corner_names)):
+        # X坐标
+        ax = axes3[0, i]
+        ax.plot(frames_vals, df[f'corner_{name}_x'], c=color, linestyle='-', label='Detected')
+        ax.plot(frames_vals, df[f'reproj_{name}_x'], c=color, linestyle='--', label='Reprojected')
+        ax.set_xlabel('Frame')
+        ax.set_ylabel('X')
+        ax.set_title(f'{name.upper()} Corner X')
+        ax.legend()
+        ax.grid(True)
+
+        # Y坐标
+        ax = axes3[1, i]
+        ax.plot(frames_vals, df[f'corner_{name}_y'], c=color, linestyle='-', label='Detected')
+        ax.plot(frames_vals, df[f'reproj_{name}_y'], c=color, linestyle='--', label='Reprojected')
+        ax.set_xlabel('Frame')
+        ax.set_ylabel('Y')
+        ax.set_title(f'{name.upper()} Corner Y')
+        ax.legend()
+        ax.grid(True)
+
+    # 后2张子图：所有角点的x和y方向重投影误差
+    ax = axes3[0, 4]
+    for color, name in zip(colors, corner_names):
+        error_x = df[f'corner_{name}_x'] - df[f'reproj_{name}_x']
+        ax.plot(frames_vals, error_x, c=color, linestyle='-', label=name.upper())
+    ax.set_xlabel('Frame')
+    ax.set_ylabel('X Error')
+    ax.set_title('X Direction Reprojection Error')
+    ax.legend()
+    ax.grid(True)
+
+    ax = axes3[1, 4]
+    for color, name in zip(colors, corner_names):
+        error_y = df[f'corner_{name}_y'] - df[f'reproj_{name}_y']
+        ax.plot(frames_vals, error_y, c=color, linestyle='-', label=name.upper())
+    ax.set_xlabel('Frame')
+    ax.set_ylabel('Y Error')
+    ax.set_title('Y Direction Reprojection Error')
+    ax.legend()
+    ax.grid(True)
+
+    fig3.tight_layout()
+    fig3.savefig(output_dir / "corner_reprojection_comparison.png", dpi=150)
     print(f"Figures saved to {output_dir}")
 
     plt.show()

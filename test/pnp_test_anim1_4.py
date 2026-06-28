@@ -87,8 +87,12 @@ class RacingDataset:
         q_xyzw = np.array([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]])  # (x,y,z,w)
 
         # IMU data (body frame)
-        angvel = np.array([row["angvel_x"], row["angvel_y"], row["angvel_z"]], dtype=np.float64)
-        accel = np.array([row["accel_x"], row["accel_y"], row["accel_z"]], dtype=np.float64)
+        try:
+            angvel = np.array([row["angvel_x"], row["angvel_y"], row["angvel_z"]], dtype=np.float64)
+            accel = np.array([row["accel_x"], row["accel_y"], row["accel_z"]], dtype=np.float64)
+        except KeyError:
+            angvel = None
+            accel = None
 
         return {
             "image_rgb": image_rgb,
@@ -123,8 +127,7 @@ def compute_gate_pose_in_camera(dataset, drone_pos, drone_quat_xyzw, R_cam_to_bo
     R_drone_world = R.from_quat(drone_quat_xyzw).as_matrix()
 
     # Camera rotation (camera -> world)
-    R_body_to_cam = R_cam_to_body.T
-    R_cam_world = R_drone_world @ R_body_to_cam  # camera frame -> world frame
+    R_cam_world = R_drone_world @ R_cam_to_body  # camera frame -> world frame
 
     # Camera position (assuming camera coincides with drone origin)
     p_cam_world = drone_pos  # since camera is at drone origin
@@ -258,6 +261,15 @@ def main():
 
     prev_time = first["time"]
 
+    R_adj = np.array(
+        [
+            [0, -1, 0],
+            [0, 0, -1],
+            [1, 0, 0],
+        ],
+        dtype=np.float64,
+    )  # 将新法线 x 转到旧法线 z
+
     # Loop over frames
     for idx in range(len(dataset)):
         print(f"Processing frame {idx:04d} ...")
@@ -332,15 +344,14 @@ def main():
             drone_pos_pnp, drone_q_pnp = estimate_drone_from_gate_pose(t_cam_gate_est, R_cam_gate_est, dataset)
 
             # Reprojection error per corner
-            # image_points = detection.corners.astype(np.float64)
-            # obj_points = pose_estimator.gate_points_3d  # (4,3)
-            # rvec = gate_pose_est.rvec.reshape(3, 1)
-            # tvec = gate_pose_est.tvec.reshape(3, 1)
-            # projected, _ = cv2.projectPoints(obj_points, rvec, tvec, dataset.camera_matrix, dataset.dist_coeffs)
-            # projected = projected.reshape(-1, 2)
-            # reproj_errors = projected - image_points  # (4,2)
-            reproj_errors = gate_pose_est.reprojection_errors
-            
+            image_points = detection.corners.astype(np.float64)
+            obj_points = pose_estimator.gate_points_3d  # (4,3)
+            rvec = gate_pose_est.rvec.reshape(3, 1)
+            tvec = gate_pose_est.tvec.reshape(3, 1)
+            projected, _ = cv2.projectPoints(obj_points, rvec, tvec, dataset.camera_matrix, dataset.dist_coeffs)
+            projected = projected.reshape(-1, 2)
+            reproj_errors = projected - image_points  # (4,2)
+
             # Store for each corner
             for i in range(4):
                 plot_data[f"reproj_err_corner{i}_x"].append(reproj_errors[i, 0])
@@ -438,40 +449,40 @@ def main():
     # ---- Generate plots ----
     # Convert quaternions to Euler angles (degrees) for easier visualization
     euler_data = {
-        'frame': plot_data['frame'],
-        'time': plot_data['time'],
+        "frame": plot_data["frame"],
+        "time": plot_data["time"],
     }
 
     # For gate pose (camera frame) - mapping from stored keys to output keys
-    gate_mapping = [('gate_quat_est', 'gate_est'), ('gate_quat_true', 'gate_true')]
+    gate_mapping = [("gate_quat_est", "gate_est"), ("gate_quat_true", "gate_true")]
     for store_prefix, out_prefix in gate_mapping:
-        qx = np.array(plot_data[f'{store_prefix}_x'])
-        qy = np.array(plot_data[f'{store_prefix}_y'])
-        qz = np.array(plot_data[f'{store_prefix}_z'])
-        qw = np.array(plot_data[f'{store_prefix}_w'])
+        qx = np.array(plot_data[f"{store_prefix}_x"])
+        qy = np.array(plot_data[f"{store_prefix}_y"])
+        qz = np.array(plot_data[f"{store_prefix}_z"])
+        qw = np.array(plot_data[f"{store_prefix}_w"])
         euler = np.full((len(qx), 3), np.nan)
         for i in range(len(qx)):
             if not np.isnan(qx[i]):
                 rot = R.from_quat([qx[i], qy[i], qz[i], qw[i]])
-                euler[i] = np.degrees(rot.as_euler('xyz'))
-        euler_data[f'{out_prefix}_roll'] = euler[:,0].tolist()
-        euler_data[f'{out_prefix}_pitch'] = euler[:,1].tolist()
-        euler_data[f'{out_prefix}_yaw'] = euler[:,2].tolist()
+                euler[i] = np.degrees(rot.as_euler("xyz"))
+        euler_data[f"{out_prefix}_roll"] = euler[:, 0].tolist()
+        euler_data[f"{out_prefix}_pitch"] = euler[:, 1].tolist()
+        euler_data[f"{out_prefix}_yaw"] = euler[:, 2].tolist()
 
     # For drone pose (world frame) - PnP, true, EKF
-    for prefix in ['drone_pnp', 'drone_true', 'drone_ekf']:
-        qx = np.array(plot_data[f'{prefix}_quat_x'])
-        qy = np.array(plot_data[f'{prefix}_quat_y'])
-        qz = np.array(plot_data[f'{prefix}_quat_z'])
-        qw = np.array(plot_data[f'{prefix}_quat_w'])
+    for prefix in ["drone_pnp", "drone_true", "drone_ekf"]:
+        qx = np.array(plot_data[f"{prefix}_quat_x"])
+        qy = np.array(plot_data[f"{prefix}_quat_y"])
+        qz = np.array(plot_data[f"{prefix}_quat_z"])
+        qw = np.array(plot_data[f"{prefix}_quat_w"])
         euler = np.full((len(qx), 3), np.nan)
         for i in range(len(qx)):
             if not np.isnan(qx[i]):
                 rot = R.from_quat([qx[i], qy[i], qz[i], qw[i]])
-                euler[i] = np.degrees(rot.as_euler('xyz'))
-        euler_data[f'{prefix}_roll'] = euler[:,0].tolist()
-        euler_data[f'{prefix}_pitch'] = euler[:,1].tolist()
-        euler_data[f'{prefix}_yaw'] = euler[:,2].tolist()
+                euler[i] = np.degrees(rot.as_euler("xyz"))
+        euler_data[f"{prefix}_roll"] = euler[:, 0].tolist()
+        euler_data[f"{prefix}_pitch"] = euler[:, 1].tolist()
+        euler_data[f"{prefix}_yaw"] = euler[:, 2].tolist()
 
     # ---- Combined plots ----
     def plot_combined_drone(euler_data, plot_data, output_dir):
@@ -479,60 +490,60 @@ def main():
         axes = axes.flatten()
         # Position X
         ax = axes[0]
-        ax.plot(plot_data['frame'], plot_data['drone_pnp_pos_x'], label='PnP')
-        ax.plot(plot_data['frame'], plot_data['drone_true_pos_x'], label='True')
-        ax.plot(plot_data['frame'], plot_data['drone_ekf_pos_x'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos X (m)')
+        ax.plot(plot_data["frame"], plot_data["drone_pnp_pos_x"], label="PnP")
+        ax.plot(plot_data["frame"], plot_data["drone_true_pos_x"], label="True")
+        ax.plot(plot_data["frame"], plot_data["drone_ekf_pos_x"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos X (m)")
         ax.legend()
         ax.grid(True)
         # Position Y
         ax = axes[1]
-        ax.plot(plot_data['frame'], plot_data['drone_pnp_pos_y'], label='PnP')
-        ax.plot(plot_data['frame'], plot_data['drone_true_pos_y'], label='True')
-        ax.plot(plot_data['frame'], plot_data['drone_ekf_pos_y'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos Y (m)')
+        ax.plot(plot_data["frame"], plot_data["drone_pnp_pos_y"], label="PnP")
+        ax.plot(plot_data["frame"], plot_data["drone_true_pos_y"], label="True")
+        ax.plot(plot_data["frame"], plot_data["drone_ekf_pos_y"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos Y (m)")
         ax.legend()
         ax.grid(True)
         # Position Z
         ax = axes[2]
-        ax.plot(plot_data['frame'], plot_data['drone_pnp_pos_z'], label='PnP')
-        ax.plot(plot_data['frame'], plot_data['drone_true_pos_z'], label='True')
-        ax.plot(plot_data['frame'], plot_data['drone_ekf_pos_z'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos Z (m)')
+        ax.plot(plot_data["frame"], plot_data["drone_pnp_pos_z"], label="PnP")
+        ax.plot(plot_data["frame"], plot_data["drone_true_pos_z"], label="True")
+        ax.plot(plot_data["frame"], plot_data["drone_ekf_pos_z"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos Z (m)")
         ax.legend()
         ax.grid(True)
         # Roll
         ax = axes[3]
-        ax.plot(plot_data['frame'], euler_data['drone_pnp_roll'], label='PnP')
-        ax.plot(plot_data['frame'], euler_data['drone_true_roll'], label='True')
-        ax.plot(plot_data['frame'], euler_data['drone_ekf_roll'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Roll (deg)')
+        ax.plot(plot_data["frame"], euler_data["drone_pnp_roll"], label="PnP")
+        ax.plot(plot_data["frame"], euler_data["drone_true_roll"], label="True")
+        ax.plot(plot_data["frame"], euler_data["drone_ekf_roll"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Roll (deg)")
         ax.legend()
         ax.grid(True)
         # Pitch
         ax = axes[4]
-        ax.plot(plot_data['frame'], euler_data['drone_pnp_pitch'], label='PnP')
-        ax.plot(plot_data['frame'], euler_data['drone_true_pitch'], label='True')
-        ax.plot(plot_data['frame'], euler_data['drone_ekf_pitch'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pitch (deg)')
+        ax.plot(plot_data["frame"], euler_data["drone_pnp_pitch"], label="PnP")
+        ax.plot(plot_data["frame"], euler_data["drone_true_pitch"], label="True")
+        ax.plot(plot_data["frame"], euler_data["drone_ekf_pitch"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pitch (deg)")
         ax.legend()
         ax.grid(True)
         # Yaw
         ax = axes[5]
-        ax.plot(plot_data['frame'], euler_data['drone_pnp_yaw'], label='PnP')
-        ax.plot(plot_data['frame'], euler_data['drone_true_yaw'], label='True')
-        ax.plot(plot_data['frame'], euler_data['drone_ekf_yaw'], label='EKF')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Yaw (deg)')
+        ax.plot(plot_data["frame"], euler_data["drone_pnp_yaw"], label="PnP")
+        ax.plot(plot_data["frame"], euler_data["drone_true_yaw"], label="True")
+        ax.plot(plot_data["frame"], euler_data["drone_ekf_yaw"], label="EKF")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Yaw (deg)")
         ax.legend()
         ax.grid(True)
         plt.tight_layout()
-        plt.savefig(output_dir / 'drone_combined.jpg', dpi=150)
+        plt.savefig(output_dir / "drone_combined.jpg", dpi=150)
         plt.close()
 
     def plot_combined_gate(euler_data, plot_data, output_dir):
@@ -540,54 +551,54 @@ def main():
         axes = axes.flatten()
         # Position X
         ax = axes[0]
-        ax.plot(plot_data['frame'], plot_data['gate_pos_est_x'], label='Est')
-        ax.plot(plot_data['frame'], plot_data['gate_pos_true_x'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos X (m)')
+        ax.plot(plot_data["frame"], plot_data["gate_pos_est_x"], label="Est")
+        ax.plot(plot_data["frame"], plot_data["gate_pos_true_x"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos X (m)")
         ax.legend()
         ax.grid(True)
         # Position Y
         ax = axes[1]
-        ax.plot(plot_data['frame'], plot_data['gate_pos_est_y'], label='Est')
-        ax.plot(plot_data['frame'], plot_data['gate_pos_true_y'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos Y (m)')
+        ax.plot(plot_data["frame"], plot_data["gate_pos_est_y"], label="Est")
+        ax.plot(plot_data["frame"], plot_data["gate_pos_true_y"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos Y (m)")
         ax.legend()
         ax.grid(True)
         # Position Z
         ax = axes[2]
-        ax.plot(plot_data['frame'], plot_data['gate_pos_est_z'], label='Est')
-        ax.plot(plot_data['frame'], plot_data['gate_pos_true_z'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pos Z (m)')
+        ax.plot(plot_data["frame"], plot_data["gate_pos_est_z"], label="Est")
+        ax.plot(plot_data["frame"], plot_data["gate_pos_true_z"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pos Z (m)")
         ax.legend()
         ax.grid(True)
         # Roll
         ax = axes[3]
-        ax.plot(plot_data['frame'], euler_data['gate_est_roll'], label='Est')
-        ax.plot(plot_data['frame'], euler_data['gate_true_roll'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Roll (deg)')
+        ax.plot(plot_data["frame"], euler_data["gate_est_roll"], label="Est")
+        ax.plot(plot_data["frame"], euler_data["gate_true_roll"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Roll (deg)")
         ax.legend()
         ax.grid(True)
         # Pitch
         ax = axes[4]
-        ax.plot(plot_data['frame'], euler_data['gate_est_pitch'], label='Est')
-        ax.plot(plot_data['frame'], euler_data['gate_true_pitch'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Pitch (deg)')
+        ax.plot(plot_data["frame"], euler_data["gate_est_pitch"], label="Est")
+        ax.plot(plot_data["frame"], euler_data["gate_true_pitch"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Pitch (deg)")
         ax.legend()
         ax.grid(True)
         # Yaw
         ax = axes[5]
-        ax.plot(plot_data['frame'], euler_data['gate_est_yaw'], label='Est')
-        ax.plot(plot_data['frame'], euler_data['gate_true_yaw'], label='True')
-        ax.set_xlabel('Frame')
-        ax.set_ylabel('Yaw (deg)')
+        ax.plot(plot_data["frame"], euler_data["gate_est_yaw"], label="Est")
+        ax.plot(plot_data["frame"], euler_data["gate_true_yaw"], label="True")
+        ax.set_xlabel("Frame")
+        ax.set_ylabel("Yaw (deg)")
         ax.legend()
         ax.grid(True)
         plt.tight_layout()
-        plt.savefig(output_dir / 'gate_combined.jpg', dpi=150)
+        plt.savefig(output_dir / "gate_combined.jpg", dpi=150)
         plt.close()
 
     def plot_combined_reproj(plot_data, output_dir):
@@ -595,15 +606,15 @@ def main():
         axes = axes.flatten()
         for i in range(4):
             ax = axes[i]
-            ax.plot(plot_data['frame'], plot_data[f'reproj_err_corner{i}_x'], label='dx')
-            ax.plot(plot_data['frame'], plot_data[f'reproj_err_corner{i}_y'], label='dy')
-            ax.set_xlabel('Frame')
-            ax.set_ylabel('Error (pixels)')
-            ax.set_title(f'Corner {i}')
+            ax.plot(plot_data["frame"], plot_data[f"reproj_err_corner{i}_x"], label="dx")
+            ax.plot(plot_data["frame"], plot_data[f"reproj_err_corner{i}_y"], label="dy")
+            ax.set_xlabel("Frame")
+            ax.set_ylabel("Error (pixels)")
+            ax.set_title(f"Corner {i}")
             ax.legend()
             ax.grid(True)
         plt.tight_layout()
-        plt.savefig(output_dir / 'reproj_combined.jpg', dpi=150)
+        plt.savefig(output_dir / "reproj_combined.jpg", dpi=150)
         plt.close()
 
     # Generate combined figures
