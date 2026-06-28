@@ -157,7 +157,7 @@ class GatePose:
     reprojection_error: float
     distance: float
     # ---------- 新增字段：存储每个角点的 (dx, dy) 误差 ----------
-    reprojection_errors: Optional[np.ndarray] = None  # shape (4,2)
+    reprojection_errors: np.ndarray  # shape (4,2)
 
 
 class PoseEstimator:
@@ -194,17 +194,6 @@ class PoseEstimator:
         if detection is None or detection.corners is None:
             return None
         image_points = detection.corners.astype(np.float64)
-
-        # 亚像素优化
-        if detection.gray_img is not None:
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-            image_points = cv2.cornerSubPix(
-                detection.gray_img,
-                image_points,
-                (5, 5),
-                (-1, -1),
-                criteria,
-            )
 
         if len(image_points) != 4:
             return None
@@ -426,10 +415,7 @@ def main():
                 gate_euler_c_est = gate_euler_c_est.tolist()
 
                 # ---------- 获取重投影误差 ----------
-                if gate_pose.reprojection_errors is not None:
-                    reproj_errors = gate_pose.reprojection_errors  # shape (4,2)
-                else:
-                    reproj_errors = np.full((4, 2), np.nan)
+                reproj_errors = gate_pose.reprojection_errors  # shape (4,2)
 
         # 真实值计算
         pos_drone_w_true_i = pos_drone_w_true[idx]
